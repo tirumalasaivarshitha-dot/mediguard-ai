@@ -1,0 +1,557 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum UserRole {
+  ADMIN
+  BIOMEDICAL_ENGINEER
+  TECHNICIAN
+}
+
+enum EquipmentStatus {
+  OPERATIONAL
+  ATTENTION_REQUIRED
+  HIGH_RISK
+  CRITICAL
+  UNDER_MAINTENANCE
+  OFFLINE
+}
+
+enum Criticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum WorkOrderType {
+  PREVENTIVE
+  CORRECTIVE
+  EMERGENCY
+}
+
+enum WorkOrderStatus {
+  PENDING
+  ASSIGNED
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  ASSIGNED
+  ESCALATED
+  RESOLVED
+  DISMISSED
+}
+
+enum NotificationType {
+  HIGH_RISK
+  SAFETY_ALERT
+  MAINTENANCE_DUE
+  TECHNICIAN_ASSIGNMENT
+  WORK_ORDER_UPDATE
+  RETURNED_TO_SERVICE
+  MODEL_TRAINING
+  DATASET_VALIDATION
+}
+
+enum DatasetType {
+  HISTORICAL_SAFETY
+  TELEMETRY
+  MAINTENANCE
+  USER_UPLOADED
+  SYNTHETIC
+}
+
+enum DatasetStatus {
+  UPLOADED
+  PROFILING
+  READY
+  TRAINING
+  COMPLETED
+  FAILED
+}
+
+enum ModelStatus {
+  TRAINING
+  EVALUATION
+  ACTIVE
+  INACTIVE
+  FAILED
+}
+
+enum HistoricalDateQuality {
+  EXACT
+  YEAR_ONLY
+  UNKNOWN
+}
+
+// Models
+model User {
+  id           String   @id @default(uuid())
+  employeeId   String   @unique
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(BIOMEDICAL_ENGINEER)
+  department   String?
+  phone        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  technicianProfile TechnicianProfile?
+  createdWorkOrders MaintenanceWorkOrder[] @relation("CreatedWorkOrders")
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  uploadedDatasets  Dataset[]
+
+  @@index([employeeId])
+  @@index([email])
+  @@index([role])
+}
+
+model TechnicianProfile {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employeeCode   String   @unique
+  expertise      Json?
+  certifications Json?
+  department     String
+  location       String
+  availability   String   @default("Available")
+  workload       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  assignedWorkOrders MaintenanceWorkOrder[] @relation("AssignedWorkOrders")
+  assignedEquipment  Equipment[]            @relation("AssignedTechnicianEquipment")
+  assignedAlerts     SafetyAlert[]          @relation("AssignedAlerts")
+
+  @@index([department])
+  @@index([availability])
+}
+
+model Equipment {
+  id                   String             @id @default(uuid())
+  equipmentCode        String             @unique
+  name                 String
+  equipmentType        String
+  manufacturer         String
+  model                String
+  serialNumber         String             @unique
+  department           String
+  location             String
+  installationDate     DateTime?
+  warrantyExpiry       DateTime?
+  operatingHours       Float              @default(0)
+  criticality          Criticality        @default(MEDIUM)
+  status               EquipmentStatus    @default(OPERATIONAL)
+  healthScore          Int                @default(100)
+  failureRisk          Int                @default(0)
+  lastMaintenanceAt    DateTime?
+  nextMaintenanceAt    DateTime?
+  assignedTechnicianId String?
+  assignedTechnician   TechnicianProfile? @relation("AssignedTechnicianEquipment", fields: [assignedTechnicianId], references: [id], onDelete: SetNull)
+  sourceDatasetId      String?
+  sourceDataset        Dataset?           @relation(fields: [sourceDatasetId], references: [id], onDelete: SetNull)
+  sourceDatasetName    String?
+  sourceRowIndex       Int?
+  sourceIdentifier     String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  telemetryReadings        TelemetryReading[]
+  assessments              Assessment[]
+  workOrders               MaintenanceWorkOrder[]
+  safetyAlerts             SafetyAlert[]
+  notifications            Notification[]
+  datasetPredictionResults DatasetPredictionResult[]
+
+  @@unique([sourceDatasetId, sourceRowIndex])
+  @@index([department])
+  @@index([equipmentType])
+  @@index([status])
+  @@index([criticality])
+  @@index([assignedTechnicianId])
+  @@index([sourceDatasetId])
+}
+
+model TelemetryReading {
+  id               String    @id @default(uuid())
+  equipmentId      String
+  equipment        Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  timestamp        DateTime  @default(now())
+  temperature      Float?
+  vibration        Float?
+  powerConsumption Float?
+  pressure         Float?
+  voltage          Float?
+  operatingHours   Float?
+  errorCount       Int?
+  additionalData   Json?
+  createdAt        DateTime  @default(now())
+
+  @@index([equipmentId])
+  @@index([timestamp])
+}
+
+model Assessment {
+  id                        String                   @id @default(uuid())
+  equipmentId               String
+  equipment                 Equipment                @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  healthScore               Int
+  failureRisk               Int
+  operationalStatus         String
+  safetyStatus              String
+  anomalyStatus             String?
+  maintenancePriority       String?
+  explanation               String?
+  modelVersionId            String?
+  modelVersion              ModelVersion?            @relation(fields: [modelVersionId], references: [id], onDelete: SetNull)
+  assessedAt                DateTime                 @default(now())
+  createdAt                 DateTime                 @default(now())
+  datasetPredictionResultId String?                  @unique
+  datasetPredictionResult   DatasetPredictionResult? @relation(fields: [datasetPredictionResultId], references: [id], onDelete: SetNull)
+
+  safetyAlerts SafetyAlert[]
+  workOrders   MaintenanceWorkOrder[]
+
+  @@index([equipmentId])
+  @@index([assessedAt])
+}
+
+model MaintenanceWorkOrder {
+  id                   String             @id @default(uuid())
+  workOrderCode        String?            @unique
+  equipmentId          String
+  equipment            Equipment          @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  assignedTechnicianId String?
+  assignedTechnician   TechnicianProfile? @relation("AssignedWorkOrders", fields: [assignedTechnicianId], references: [id], onDelete: SetNull)
+  title                String
+  description          String?
+  type                 WorkOrderType      @default(PREVENTIVE)
+  priority             Priority           @default(MEDIUM)
+  status               WorkOrderStatus    @default(PENDING)
+  scheduledAt          DateTime?
+  dueAt                DateTime?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  estimatedCost        Float?
+  actualCost           Float?
+  maintenanceCost      Float?
+  downtimeMinutes      Int?
+  partsUsed            Json?
+  notes                String?
+  technicianNotes      String?
+  completionNotes      String?
+  source               String             @default("MANUAL")
+  assessmentId         String?
+  assessment           Assessment?        @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+  createdById          String?
+  createdBy            User?              @relation("CreatedWorkOrders", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  safetyAlerts         SafetyAlert[]
+
+  @@index([equipmentId])
+  @@index([assignedTechnicianId])
+  @@index([status])
+  @@index([priority])
+  @@index([scheduledAt])
+  @@index([dueAt])
+}
+
+model SafetyAlert {
+  id              String                @id @default(uuid())
+  equipmentId     String
+  equipment       Equipment             @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  assessmentId    String?
+  assessment      Assessment?           @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+  title           String
+  description     String
+  severity        AlertSeverity         @default(WARNING)
+  status          AlertStatus           @default(OPEN)
+  riskScore       Int?
+  source          String                @default("AI_ASSESSMENT")
+  assignedToId    String?
+  assignedTo      TechnicianProfile?    @relation("AssignedAlerts", fields: [assignedToId], references: [id], onDelete: SetNull)
+  workOrderId     String?
+  workOrder       MaintenanceWorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  acknowledgedAt  DateTime?
+  escalatedAt     DateTime?
+  resolvedAt      DateTime?
+  dismissedAt     DateTime?
+  resolutionNotes String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  notifications Notification[]
+
+  @@index([equipmentId])
+  @@index([status])
+  @@index([severity])
+  @@index([workOrderId])
+}
+
+model Notification {
+  id                 String           @id @default(uuid())
+  userId             String
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title              String
+  message            String
+  type               NotificationType
+  severity           AlertSeverity    @default(INFO)
+  isRead             Boolean          @default(false)
+  relatedEquipmentId String?
+  relatedEquipment   Equipment?       @relation(fields: [relatedEquipmentId], references: [id], onDelete: SetNull)
+  relatedAlertId     String?
+  relatedAlert       SafetyAlert?     @relation(fields: [relatedAlertId], references: [id], onDelete: SetNull)
+  createdAt          DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model Dataset {
+  id                 String        @id @default(uuid())
+  name               String
+  description        String?
+  source             String
+  fileName           String
+  fileType           String
+  fileSize           Int           @default(0)
+  rowCount           Int           @default(0)
+  columnCount        Int           @default(0)
+  targetColumn       String?
+  profileSummary     Json?
+  provenance         Json?
+  mappingConfig      Json?
+  validationStatus   String?       @default("VALIDATED")
+  validationWarnings Json?
+  storagePath        String?
+  status             DatasetStatus @default(UPLOADED)
+  datasetType        DatasetType   @default(TELEMETRY)
+  isOperational      Boolean       @default(false)
+  uploadedById       String?
+  uploadedBy         User?         @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  models            ModelVersion[]
+  predictionResults DatasetPredictionResult[]
+  sourceEquipment   Equipment[]
+
+  @@index([datasetType])
+  @@index([status])
+  @@index([isOperational])
+}
+
+model ModelVersion {
+  id                String      @id @default(uuid())
+  name              String
+  version           String
+  algorithm         String
+  datasetId         String?
+  dataset           Dataset?    @relation(fields: [datasetId], references: [id], onDelete: SetNull)
+  datasetName       String?
+  status            ModelStatus @default(TRAINING)
+  accuracy          Float?
+  precision         Float?
+  recall            Float?
+  f1Score           Float?
+  rocAuc            Float?
+  trainingDuration  Int?
+  targetColumn      String?
+  artifactPath      String?
+  trainingSamples   Int?
+  evaluationSamples Int?
+  featureCount      Int?
+  trainingDataType  String?
+  disclaimer        String?
+  featureSchema     Json?
+  isOperational     Boolean     @default(false)
+  confusionMatrix   Json?
+  featureImportance Json?
+  isActive          Boolean     @default(false)
+  trainedAt         DateTime?
+  activatedAt       DateTime?
+  createdAt         DateTime    @default(now())
+
+  assessments       Assessment[]
+  predictionResults DatasetPredictionResult[]
+
+  @@index([status])
+  @@index([isActive])
+}
+
+model DatasetPredictionResult {
+  id             String       @id @default(uuid())
+  datasetId      String
+  dataset        Dataset      @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  modelVersionId String
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+  rowIndex       Int
+  rowIdentifier  String?
+  prediction     String
+  predictedClass String?
+  failureRisk    Float?
+  status         String       @default("COMPLETED")
+  errorMessage   String?
+  predictedAt    DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  equipmentId    String?
+  equipment      Equipment?   @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  assessment     Assessment?
+
+  @@unique([datasetId, modelVersionId, rowIndex])
+  @@index([datasetId, modelVersionId])
+  @@index([status])
+}
+
+model HistoricalSafetyRecord {
+  id           String   @id @default(uuid())
+  deviceCode   String?
+  deviceName   String
+  manufacturer String
+  modelNumber  String?
+  country      String   @default("Global")
+  eventYear    Int
+  recallClass  String   @default("Class II")
+  eventType    String   @default("Field Safety Notice")
+  description  String
+  actionTaken  String?
+  sourceUrl    String?
+  createdAt    DateTime @default(now())
+
+  @@index([manufacturer])
+  @@index([deviceName])
+  @@index([eventYear])
+  @@index([recallClass])
+  @@index([country])
+}
+
+model HistoricalManufacturer {
+  id             String                      @id @default(uuid())
+  sourceId       String                      @unique
+  sourceKey      String                      @unique
+  name           String
+  normalizedName String
+  country        String?
+  parentCompany  String?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+  devices        HistoricalDevice[]
+  events         HistoricalSafetyEvent[]
+  aggregates     HistoricalSafetyAggregate[]
+
+  @@index([name])
+}
+
+model HistoricalDevice {
+  id             String                  @id @default(uuid())
+  sourceId       String                  @unique
+  sourceKey      String                  @unique
+  deviceCode     String?
+  name           String
+  normalizedName String
+  modelNumber    String                  @default("")
+  classification String?
+  country        String?
+  implanted      String?
+  quantityInCommerce Float?
+  riskClass      String?
+  manufacturerId String
+  manufacturer   HistoricalManufacturer  @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  events         HistoricalSafetyEvent[]
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([deviceCode])
+  @@index([normalizedName])
+}
+
+model HistoricalSafetyEvent {
+  id             String                 @id @default(uuid())
+  sourceId       String                 @unique
+  deviceCode     String?
+  manufacturerId String
+  deviceId       String
+  manufacturer   HistoricalManufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  device         HistoricalDevice       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  country        String                 @default("Global")
+  eventDate      DateTime?
+  eventYear      Int?
+  dateQuality    HistoricalDateQuality  @default(UNKNOWN)
+  recallClass    String                 @default("Unknown")
+  eventType      String                 @default("Safety event")
+  description    String
+  actionTaken    String?
+  sourceUrl      String?
+  rawData        Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@index([manufacturerId])
+  @@index([deviceId])
+  @@index([eventDate])
+  @@index([eventYear])
+  @@index([recallClass])
+  @@index([country])
+}
+
+model HistoricalSafetyAggregate {
+  id             String                 @id @default(uuid())
+  manufacturerId String
+  year           Int?
+  recallClass    String
+  eventCount     Int                    @default(0)
+  manufacturer   HistoricalManufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  updatedAt      DateTime               @updatedAt
+
+  @@unique([manufacturerId, year, recallClass])
+  @@index([year])
+  @@index([recallClass])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String
+  details    Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType])
+}
